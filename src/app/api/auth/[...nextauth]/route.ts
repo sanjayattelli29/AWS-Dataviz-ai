@@ -51,18 +51,9 @@ export const authOptions: AuthOptions = {
     signIn: '/auth/signin',
   },
   callbacks: {
-    async jwt({ token, user, account }) {
-      if (account && user) {
-        token.accessToken = (user as any).token || (account as any).access_token || null;
-      }
-      return token;
-    },
     async session({ session, token }) {
       if (token && session.user) {
         session.user.id = token.sub || '';
-      }
-      if (token && (token as any).accessToken) {
-        (session as any).accessToken = (token as any).accessToken;
       }
       return session;
     },
