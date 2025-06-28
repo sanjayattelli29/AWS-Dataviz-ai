@@ -1,0 +1,44 @@
+# Node modules
+node_modules/
+.env
+.env.local
+.env.*.local
+.nyc_output/
+coverage/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Serverless build artifacts
+.serverless/
+.sls/
+
+# TypeScript build output
+dist/
+build/
+*.tsbuildinfo
+
+# Serverless sensitive files
+serverless.yml
+serverless.ts
+serverless.yml.bak
+
+# IDEs and editors
+.vscode/
+.idea/
+*.swp
+
+# Git backups
+*.orig
+*.rej
+
+# Misc
+*.local

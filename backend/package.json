@@ -1,0 +1,47 @@
+{
+    "name": "datavizai-lambda-backend",
+    "version": "1.0.0",
+    "description": "AWS Lambda backend for DataVizAI",
+    "main": "index.js",
+    "scripts": {
+        "build": "tsc",
+        "zip": "cd dist && zip -r ../lambda-deployment.zip .",
+        "deploy": "npm run build && npm run zip",
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "dependencies": {
+        "adm-zip": "^0.5.16",
+        "bcryptjs": "^3.0.2",
+        "cloudinary": "^1.41.0",
+        "cors": "^2.8.5",
+        "dotenv": "^16.6.1",
+        "jsonwebtoken": "^9.0.2",
+        "mongodb": "^6.3.0",
+        "multer": "^1.4.5-lts.1",
+        "nodemailer": "^6.9.7",
+        "razorpay": "^2.9.2"
+    },
+    "devDependencies": {
+        "@serverless/typescript": "^4.15.1",
+        "@types/aws-lambda": "^8.10.126",
+        "@types/bcrypt": "^5.0.2",
+        "@types/cors": "^2.8.17",
+        "@types/jsonwebtoken": "^9.0.5",
+        "@types/multer": "^1.4.11",
+        "@types/node": "^20.8.10",
+        "@types/nodemailer": "^6.4.14",
+        "serverless": "^3.38.0",
+        "serverless-dotenv-plugin": "^6.0.0",
+        "serverless-plugin-typescript": "^2.1.5",
+        "ts-node": "^10.9.2",
+        "typescript": "^5.8.3"
+    },
+    "keywords": [
+        "aws",
+        "lambda",
+        "mongodb",
+        "datavizai"
+    ],
+    "author": "DataVizAI Team",
+    "license": "MIT"
+}
