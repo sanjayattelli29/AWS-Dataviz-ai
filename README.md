@@ -1693,4 +1693,4 @@ Contributions are welcome! If you'd like to contribute, please fork the reposito
 
 ## 📄 License
 
-This project is licensed under the MIT License.
+This project is licensed under the MIT License
