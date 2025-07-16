@@ -14,6 +14,10 @@ const groq = new Groq({
 interface Dataset {
   _id: string;
   name: string;
+  columns: Array<{
+    name: string;
+    type: 'numeric' | 'text' | 'date';
+  }>;
 }
 
 interface ChatMessage {
@@ -22,23 +26,9 @@ interface ChatMessage {
   timestamp: Date;
 }
 
-interface Metrics {
-  basic: {
-    nullCounts: Record<string, number>;
-    uniqueCounts: Record<string, number>;
-    datatypes: Record<string, string>;
-  };
-  statistical: {
-    mean?: Record<string, number>;
-    median?: Record<string, number>;
-    std?: Record<string, number>;
-    min?: Record<string, number>;
-    max?: Record<string, number>;
-  };
-  advanced: {
-    correlations?: Record<string, Record<string, number>>;
-    outliers?: Record<string, number[]>;
-  };
+// Updated to match the metrics structure from the main page
+interface Metrics extends Record<string, number | string | null> {
+  [key: string]: number | string | null;
 }
 
 export const Chatbot: React.FC = () => {
@@ -50,80 +40,121 @@ export const Chatbot: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [metricsSaved, setMetricsSaved] = useState(false);
+  const [isLoadingDatasets, setIsLoadingDatasets] = useState(false);
+  const [isLoadingMetrics, setIsLoadingMetrics] = useState(false);
+  const [currentStep, setCurrentStep] = useState<'select-dataset' | 'fetch-metrics' | 'chat-ready'>('select-dataset');
   const [connectionStatus, setConnectionStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
   const chatboxRef = useRef<HTMLDivElement>(null);
 
-  // Initialize chatbot with welcome message
-  useEffect(() => {
-    if (isOpen && messages.length === 0) {
-      setMessages([{ 
-        type: 'bot', 
-        content: 'Hello! I\'m your AI Data Assistant. Please select a dataset to begin analyzing your data insights.',
-        timestamp: new Date()
-      }]);
+  // Function to log chat conversation to n8n webhook
+  const logChatToWebhook = async (question: string, answer: string) => {
+    try {
+      await fetch("https://n8n.editwithsanjay.in/webhook/log-chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          question: question,
+          answer: answer
+        })
+      });
+      console.log('Chat logged to n8n successfully');
+    } catch (error) {
+      console.error('Failed to log chat to n8n:', error);
+      // Don't show error to user as this is background logging
     }
-  }, [isOpen, messages.length]);
+  };
 
-  // Fetch datasets from MongoDB when chatbot opens
-  useEffect(() => {
-    if (isOpen) {
-      fetchDatasets();
-    } else {
-      // Reset state when chatbot closes
-      resetChatState();
-    }
-  }, [isOpen]);
-
+  // Reset chat state function
   const resetChatState = () => {
     setSelectedDataset(null);
     setCurrentMetrics(null);
     setMessages([]);
-    setMetricsSaved(false);
+    setCurrentStep('select-dataset');
     setConnectionStatus('idle');
     setInputValue('');
+    setDatasets([]);
   };
 
-  const fetchDatasets = async () => {
+  // Fetch datasets from MongoDB that belong to the current user
+  const fetchUserDatasets = async () => {
+    if (!session?.user?.id) {
+      setMessages(prev => [...prev, { 
+        type: 'bot', 
+        content: 'Please sign in to access your datasets.',
+        timestamp: new Date()
+      }]);
+      return;
+    }
+
     try {
+      setIsLoadingDatasets(true);
       setConnectionStatus('connecting');
-      const response = await fetch('/api/metrics/list-datasets');
+      
+      const response = await fetch('/api/datasets');
       
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: Failed to fetch datasets`);
       }
       
-      const data = await response.json();
-      setDatasets(data);
-      setConnectionStatus('connected');
+      const datasets = await response.json();
       
-      if (messages.length === 0) {
-        setMessages([{ 
-          type: 'bot', 
-          content: 'Great! I\'ve loaded your datasets. Please select one to begin our conversation about your data insights.',
-          timestamp: new Date()
-        }]);
+      if (Array.isArray(datasets)) {
+        setDatasets(datasets);
+        setConnectionStatus('connected');
+        
+        if (datasets.length > 0) {
+          setMessages(prev => [...prev, { 
+            type: 'bot', 
+            content: `Great! I found ${datasets.length} dataset(s) in your account. Please select one to begin analyzing your data.`,
+            timestamp: new Date()
+          }]);
+          setCurrentStep('select-dataset');
+        } else {
+          setMessages(prev => [...prev, { 
+            type: 'bot', 
+            content: 'No datasets found in your account. Please upload a dataset first to start analyzing.',
+            timestamp: new Date()
+          }]);
+        }
+      } else {
+        throw new Error('Invalid response format');
       }
     } catch (error) {
       setConnectionStatus('error');
       const errorMessage = error instanceof Error ? error.message : 'Failed to load datasets';
-      toast.error(errorMessage);
       console.error('Error fetching datasets:', error);
       
-      setMessages([{ 
+      setMessages(prev => [...prev, { 
         type: 'bot', 
-        content: 'Sorry, I encountered an error while loading your datasets. Please refresh and try again.',
+        content: `Sorry, I encountered an error while loading your datasets: ${errorMessage}. Please refresh and try again.`,
         timestamp: new Date()
       }]);
+    } finally {
+      setIsLoadingDatasets(false);
     }
   };
 
-  const handleDatasetSelect = async (selectedId: string) => {
-    if (!session?.user?.id) {
-      toast.error('Please sign in to access metrics');
-      return;
+  // Initialize chatbot and fetch datasets when opened
+  useEffect(() => {
+    if (isOpen) {
+      if (messages.length === 0) {
+        setMessages([{ 
+          type: 'bot', 
+          content: 'Hello! I\'m your AI Data Assistant. Let me load your datasets first.',
+          timestamp: new Date()
+        }]);
+        fetchUserDatasets();
+      }
+    } else {
+      // Reset state when chatbot closes
+      resetChatState();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, session?.user?.id, messages.length]);
 
+  const handleDatasetSelect = async (selectedId: string) => {
     const selected = datasets.find(d => d._id === selectedId);
     
     if (!selected) {
@@ -132,12 +163,28 @@ export const Chatbot: React.FC = () => {
     }
 
     setSelectedDataset(selected);
-    setMetricsSaved(false);
-    setIsLoading(true);
+    setCurrentStep('fetch-metrics');
+    
+    const selectionMessage: ChatMessage = {
+      type: 'bot',
+      content: `Perfect! You've selected "${selected.name}". Now I need to fetch the metrics for this dataset. Click the "Fetch Metrics" button below to load the analysis data.`,
+      timestamp: new Date()
+    };
+    
+    setMessages(prev => [...prev, selectionMessage]);
+  };
+
+  const handleFetchMetrics = async () => {
+    if (!selectedDataset || !session?.user?.id) {
+      toast.error('Please select a dataset and ensure you are signed in');
+      return;
+    }
+
+    setIsLoadingMetrics(true);
     
     const loadingMessage: ChatMessage = {
       type: 'bot',
-      content: `Loading metrics for dataset: "${selected.name}"... This may take a moment.`,
+      content: `Fetching metrics for "${selectedDataset.name}"... This may take a moment.`,
       timestamp: new Date()
     };
     
@@ -145,20 +192,20 @@ export const Chatbot: React.FC = () => {
 
     try {
       console.log('Fetching metrics for dataset:', {
-        userId: session?.user?.id,
-        datasetId: selected._id,
-        datasetName: selected.name
+        userId: session.user.id,
+        datasetId: selectedDataset._id,
+        datasetName: selectedDataset.name
       });
 
-      const mongoResponse = await fetch(
-        `/api/metrics/get?userId=${encodeURIComponent(session?.user?.id)}&datasetId=${encodeURIComponent(selected._id)}`
+      const response = await fetch(
+        `/api/metrics/get?userId=${encodeURIComponent(session.user.id)}&datasetId=${encodeURIComponent(selectedDataset._id)}`
       );
       
-      if (!mongoResponse.ok) {
-        throw new Error(`HTTP ${mongoResponse.status}: Failed to fetch metrics`);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: Failed to fetch metrics`);
       }
 
-      const data = await mongoResponse.json();
+      const data = await response.json();
       
       console.log('Metrics fetch response:', {
         success: data.success,
@@ -168,18 +215,18 @@ export const Chatbot: React.FC = () => {
       
       if (data.success && data.metrics) {
         setCurrentMetrics(data.metrics);
-        setMetricsSaved(true);
+        setCurrentStep('chat-ready');
         
         const successMessage: ChatMessage = {
           type: 'bot',
-          content: `Perfect! I've loaded the metrics for "${selected.name}". I can help you understand:\n\n• Data quality and missing values\n• Statistical summaries and distributions\n• Correlations between variables\n• Outlier detection\n• Data insights and patterns\n\nWhat would you like to explore first?`,
+          content: `Excellent! I've successfully loaded the metrics for "${selectedDataset.name}". I can now help you understand:\n\n• Data quality and completeness analysis\n• Statistical insights and distributions\n• Missing values and outlier detection\n• Feature relationships and correlations\n• Data preprocessing recommendations\n\nWhat would you like to explore about your data?`,
           timestamp: new Date()
         };
         
         setMessages(prev => [...prev, successMessage]);
         toast.success('Metrics loaded successfully');
       } else {
-        throw new Error('No metrics found for this dataset');
+        throw new Error('No metrics found for this dataset. Please generate metrics first.');
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to fetch dataset metrics';
@@ -187,25 +234,26 @@ export const Chatbot: React.FC = () => {
       
       const errorChatMessage: ChatMessage = {
         type: 'bot',
-        content: `I couldn't find cached metrics for "${selected.name}". Please generate metrics for this dataset first using the metrics generation tool, then return to chat with me about the insights.`,
+        content: `I couldn't find metrics for "${selectedDataset.name}". Please generate metrics for this dataset first using the quality metrics tool, then return to chat with me about the insights.`,
         timestamp: new Date()
       };
       
       setMessages(prev => [...prev, errorChatMessage]);
       toast.error(errorMessage);
       
-      // Reset dataset selection since we can't proceed
+      // Reset to dataset selection step
+      setCurrentStep('select-dataset');
       setSelectedDataset(null);
       setCurrentMetrics(null);
     } finally {
-      setIsLoading(false);
+      setIsLoadingMetrics(false);
     }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!inputValue.trim() || !currentMetrics || !selectedDataset || !session?.user?.id) {
+    if (!inputValue.trim() || !currentMetrics || !selectedDataset || !session?.user?.id || currentStep !== 'chat-ready') {
       return;
     }
 
@@ -221,20 +269,29 @@ export const Chatbot: React.FC = () => {
     setIsLoading(true);
 
     try {
-      // Create context message with metrics data
-      const contextMessage = `Context: Working with dataset "${selectedDataset.name}". 
-The dataset has the following metrics:
-${JSON.stringify(currentMetrics, null, 2)}
+      // Format metrics data for better AI understanding
+      const metricsInfo = Object.entries(currentMetrics)
+        .filter(([, value]) => value !== null && value !== undefined)
+        .map(([key, value]) => `${key}: ${value}`)
+        .join('\n');
 
-Based on this context, please answer the following question:
-${userMessage}`;
+      // Create context message with metrics data
+      const contextMessage = `Context: Working with dataset "${selectedDataset.name}" (ID: ${selectedDataset._id}).
+      
+The dataset has the following quality metrics:
+${metricsInfo}
+
+Based on these metrics, please answer the following question about the data:
+${userMessage}
+
+Please provide insights that are specific to the actual metric values shown above. Focus on data quality, patterns, recommendations for preprocessing, and actionable insights.`;
 
       // Call Groq API
       const completion = await groq.chat.completions.create({
         messages: [
           {
             role: "system",
-            content: "You are an AI data analysis assistant. You help users understand their data metrics and provide insights based on statistical analysis. Be concise and precise in your explanations."
+            content: "You are an expert AI data analysis assistant. You help users understand their dataset quality metrics and provide actionable insights. Be specific about the metric values you see, explain what they mean for data quality, and provide concrete recommendations for data preprocessing and analysis. Use the actual metric values in your explanations."
           },
           {
             role: "user",
@@ -242,6 +299,8 @@ ${userMessage}`;
           }
         ],
         model: "llama-3.3-70b-versatile",
+        temperature: 0.7,
+        max_tokens: 1000,
       });
 
       const botResponse = completion.choices[0]?.message?.content || 
@@ -254,6 +313,9 @@ ${userMessage}`;
       };
       
       setMessages(prev => [...prev, botChatMessage]);
+      
+      // Log the conversation to n8n webhook
+      logChatToWebhook(userMessage, botResponse);
       
     } catch (error) {
       console.error('Chat request error:', error);
@@ -276,7 +338,7 @@ ${userMessage}`;
   const handleBackToDatasets = () => {
     setSelectedDataset(null);
     setCurrentMetrics(null);
-    setMetricsSaved(false);
+    setCurrentStep('select-dataset');
     
     const backMessage: ChatMessage = {
       type: 'bot',
@@ -299,7 +361,7 @@ ${userMessage}`;
     conversationText += `Export Date: ${new Date().toLocaleString()}\n`;
     conversationText += `${'='.repeat(50)}\n\n`;
 
-    messages.forEach((message, index) => {
+    messages.forEach((message) => {
       const timestamp = message.timestamp.toLocaleString();
       const sender = message.type === 'user' ? 'You' : 'AI Assistant';
       conversationText += `[${timestamp}] ${sender}:\n${message.content}\n\n`;
@@ -465,7 +527,8 @@ ${userMessage}`;
 
             {/* Input Area */}
             <div className="p-3 border-t border-gray-200/50 bg-white/80 backdrop-blur-sm">
-              {!selectedDataset ? (
+              {/* Step 1: Dataset Selection */}
+              {currentStep === 'select-dataset' && (
                 <div>
                   <label className="block text-xs font-medium text-gray-700 mb-2">
                     Choose a dataset to analyze:
@@ -474,10 +537,10 @@ ${userMessage}`;
                     className="w-full p-2.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white text-gray-800 font-medium"
                     onChange={(e) => e.target.value && handleDatasetSelect(e.target.value)}
                     value=""
-                    disabled={connectionStatus === 'connecting'}
+                    disabled={isLoadingDatasets}
                   >
                     <option value="" className="text-gray-500">
-                      {connectionStatus === 'connecting' ? 'Loading datasets...' : 'Select a dataset'}
+                      {isLoadingDatasets ? 'Loading your datasets...' : 'Select a dataset'}
                     </option>
                     {datasets.map((dataset) => (
                       <option key={dataset._id} value={dataset._id} className="text-gray-800">
@@ -485,49 +548,110 @@ ${userMessage}`;
                       </option>
                     ))}
                   </select>
+                  {datasets.length === 0 && !isLoadingDatasets && (
+                    <p className="text-xs text-gray-500 mt-2">
+                      No datasets found. Please upload a dataset first.
+                    </p>
+                  )}
                 </div>
-              ) : currentMetrics ? (
-                <form onSubmit={handleSubmit} className="flex gap-2">
-                  <input
-                    type="text"
-                    value={inputValue}
-                    onChange={(e) => setInputValue(e.target.value)}
-                    placeholder="Ask about your data..."
-                    className="flex-1 p-2.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 disabled:bg-gray-100 text-gray-800 font-medium"
-                    disabled={isLoading}
-                    maxLength={500}
-                  />
-                  <button
-                    type="button"
-                    onClick={downloadConversation}
-                    disabled={messages.length <= 1}
-                    className="px-3 py-2.5 bg-gray-600 text-white rounded-lg hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center group"
-                    title="Download chat"
-                  >
-                    <svg className="w-4 h-4 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                    </svg>
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={isLoading || !inputValue.trim()}
-                    className="px-3 py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-lg hover:from-indigo-700 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 flex items-center justify-center group shadow-md"
-                    title="Send message"
-                  >
-                    <svg className="w-4 h-4 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                    </svg>
-                  </button>
-                </form>
-              ) : (
-                <div className="text-center text-gray-600 p-3">
-                  <div className="mb-2">
-                    <svg className="w-6 h-6 mx-auto text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-                    </svg>
+              )}
+
+              {/* Step 2: Fetch Metrics */}
+              {currentStep === 'fetch-metrics' && selectedDataset && (
+                <div className="space-y-3">
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                    <div className="flex items-center space-x-2 mb-2">
+                      <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                      </svg>
+                      <span className="text-sm font-semibold text-blue-800">Selected Dataset</span>
+                    </div>
+                    <p className="text-sm text-blue-700 truncate">{selectedDataset.name}</p>
                   </div>
-                  <p className="text-xs font-medium text-gray-700">No metrics available</p>
-                  <p className="text-xs mt-1 text-gray-500">Generate metrics for this dataset first to start chatting.</p>
+                  
+                  <button
+                    onClick={handleFetchMetrics}
+                    disabled={isLoadingMetrics}
+                    className="w-full p-3 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-lg hover:from-indigo-700 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 flex items-center justify-center space-x-2 font-medium"
+                  >
+                    {isLoadingMetrics ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                        <span>Fetching Metrics...</span>
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                        </svg>
+                        <span>Fetch Metrics</span>
+                      </>
+                    )}
+                  </button>
+                  
+                  <div className="flex space-x-2">
+                    <button
+                      onClick={handleBackToDatasets}
+                      className="flex-1 p-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors text-sm font-medium"
+                    >
+                      Back to Datasets
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Step 3: Chat Ready */}
+              {currentStep === 'chat-ready' && selectedDataset && currentMetrics && (
+                <div className="space-y-2">
+                  <div className="bg-green-50 border border-green-200 rounded-lg p-2">
+                    <div className="flex items-center space-x-2">
+                      <svg className="w-3 h-3 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                      <span className="text-xs font-semibold text-green-800">Metrics Loaded</span>
+                    </div>
+                    <p className="text-xs text-green-700 truncate">{selectedDataset.name}</p>
+                  </div>
+                  
+                  <form onSubmit={handleSubmit} className="flex gap-2">
+                    <input
+                      type="text"
+                      value={inputValue}
+                      onChange={(e) => setInputValue(e.target.value)}
+                      placeholder="Ask about your data metrics..."
+                      className="flex-1 p-2.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 disabled:bg-gray-100 text-gray-800 font-medium"
+                      disabled={isLoading}
+                      maxLength={500}
+                    />
+                    <button
+                      type="button"
+                      onClick={downloadConversation}
+                      disabled={messages.length <= 1}
+                      className="px-3 py-2.5 bg-gray-600 text-white rounded-lg hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center group"
+                      title="Download chat"
+                    >
+                      <svg className="w-4 h-4 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isLoading || !inputValue.trim()}
+                      className="px-3 py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-lg hover:from-indigo-700 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 flex items-center justify-center group shadow-md"
+                      title="Send message"
+                    >
+                      <svg className="w-4 h-4 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                      </svg>
+                    </button>
+                  </form>
+                  
+                  <button
+                    onClick={handleBackToDatasets}
+                    className="w-full p-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors text-xs font-medium"
+                  >
+                    Change Dataset
+                  </button>
                 </div>
               )}
             </div>

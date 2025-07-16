@@ -58,30 +58,108 @@ export default function AIAnalysis() {
       setCurrentDataset(selected);
       setCurrentPage(0);
 
-      // Calculate initial data quality assessment
-      const quality = assessDataQuality(selected);
-      const visualRecommendations = recommendVisualizations(selected);
-
+      // Show loading message for metrics
       setMessages([{
         sender: 'bot',
-        text: `Dataset "${selected.name}" selected! Here's a quick overview:
+        text: `Dataset "${selected.name}" selected! Fetching metrics from MongoDB... This may take a moment.`
+      }]);
 
-Data Quality Assessment:
+      try {
+        // Auto-fetch metrics from MongoDB
+        console.log('Auto-fetching metrics for dataset:', {
+          userId: session?.user?.id,
+          datasetId: selected._id,
+          datasetName: selected.name
+        });
+
+        const response = await fetch(
+          `/api/metrics/get?userId=${encodeURIComponent(session?.user?.id || '')}&datasetId=${encodeURIComponent(selected._id)}`
+        );
+        
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: Failed to fetch metrics`);
+        }
+
+        const data = await response.json();
+        
+        console.log('Metrics fetch response:', {
+          success: data.success,
+          hasMetrics: !!data.metrics,
+          metricsKeys: data.metrics ? Object.keys(data.metrics) : []
+        });
+        
+        if (data.success && data.metrics) {
+          // Store metrics in the dataset object for AI analysis
+          selected.mongoMetrics = data.metrics;
+          
+          console.log('Successfully loaded MongoDB metrics:', {
+            datasetName: selected.name,
+            metricsCount: Object.keys(data.metrics).length,
+            sampleMetrics: Object.keys(data.metrics).slice(0, 3)
+          });
+          
+          // Calculate initial data quality assessment
+          const quality = assessDataQuality(selected);
+          const visualRecommendations = recommendVisualizations(selected);
+
+          setMessages([{
+            sender: 'bot',
+            text: `Dataset "${selected.name}" loaded with MongoDB metrics! Here's a comprehensive overview:
+
+📊 Data Quality Assessment:
 • Completeness: ${quality.completeness.toFixed(1)}%
 • Consistency: ${quality.consistency.toFixed(1)}%
 • Accuracy: ${quality.accuracy.toFixed(1)}%
 ${quality.suggestions.map(s => `• ${s.description} - ${s.recommendation}`).join('\n')}
 
-Top Visualization Recommendations:
+📈 MongoDB Metrics Available:
+• ${Object.keys(data.metrics).length} quality metrics loaded
+• Real-time analysis capabilities enabled
+
+🎯 Top Visualization Recommendations:
 ${visualRecommendations.slice(0, 3).map(r => `• ${r.chartType}: ${r.description}`).join('\n')}
 
-I can help you analyze this data. Try:
+✨ I can help you analyze this data with enhanced insights. Try:
+• "@ai analyze trends with metrics"
+• "@ai find correlations using quality data"
+• "@ai what insights can you share from the metrics?"
+• Or ask about specific columns and statistics!`
+          }]);
+          toast.success(`Metrics loaded for: ${selected.name}`);
+        } else {
+          throw new Error('No metrics found for this dataset. Please generate metrics first.');
+        }
+      } catch (error) {
+        console.error('Error fetching metrics:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Failed to fetch dataset metrics';
+        
+        // Fallback to basic analysis without metrics
+        const quality = assessDataQuality(selected);
+        const visualRecommendations = recommendVisualizations(selected);
+
+        setMessages([{
+          sender: 'bot',
+          text: `Dataset "${selected.name}" selected, but couldn't load MongoDB metrics.
+
+⚠️ Metrics Status: ${errorMessage}
+
+📊 Basic Data Quality Assessment:
+• Completeness: ${quality.completeness.toFixed(1)}%
+• Consistency: ${quality.consistency.toFixed(1)}%
+• Accuracy: ${quality.accuracy.toFixed(1)}%
+
+🎯 Visualization Recommendations:
+${visualRecommendations.slice(0, 3).map(r => `• ${r.chartType}: ${r.description}`).join('\n')}
+
+💡 Note: Generate metrics for this dataset first to unlock enhanced AI analysis capabilities.
+
+I can still help with basic analysis:
 • "@ai analyze trends"
 • "@ai find correlations"
-• "@ai what insights can you share?"
-• Or ask about specific columns and statistics!`
-      }]);
-      toast.success(`Selected: ${selected.name}`);
+• Or ask about specific columns!`
+        }]);
+        toast.error(`Basic analysis mode for: ${selected.name}`);
+      }
     } else {
       setCurrentDataset(null);
       setMessages([]);
@@ -223,7 +301,7 @@ I can help you analyze this data. Try:
 
       {/* Add AI feature hint */}
       <div className="bg-blue-50 p-4 rounded-lg mb-4 text-sm text-blue-700">
-        💡 Pro tip: Start your message with @ai to get AI-powered advanced analysis
+        💡 Pro tip: Start your message with @ai to get detailed AI-powered analysis with MongoDB metrics (300-600 chars)
       </div>
       
       {/* Dataset Selection */}
